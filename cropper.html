@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Cropper - 53:65</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useRef, useEffect } = React;
+
+        function ImageCropper() {
+            const [image, setImage] = useState(null);
+            const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
+            const [cropBox, setCropBox] = useState({ x: 0, y: 0, width: 265, height: 325 });
+            const [isDragging, setIsDragging] = useState(false);
+            const [isResizing, setIsResizing] = useState(false);
+            const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+            const [fileName, setFileName] = useState('');
+            
+            const fileInputRef = useRef(null);
+            const imageRef = useRef(null);
+            const containerRef = useRef(null);
+
+            const ASPECT_RATIO = 53 / 65; // 530:650
+            const TARGET_WIDTH = 530;
+            const TARGET_HEIGHT = 650;
+
+            const initializeCropBox = () => {
+                if (imageRef.current) {
+                    const displayWidth = imageRef.current.offsetWidth;
+                    const displayHeight = imageRef.current.offsetHeight;
+                    
+                    if (displayWidth === 0 || displayHeight === 0) {
+                        // Image not yet rendered, try again
+                        setTimeout(initializeCropBox, 50);
+                        return;
+                    }
+                    
+                    // Maximize height first (use 100% of available height)
+                    let cropHeight = displayHeight;
+                    let cropWidth = cropHeight * ASPECT_RATIO;
+                    
+                    // If width exceeds image bounds, constrain by width instead
+                    if (cropWidth > displayWidth) {
+                        cropWidth = displayWidth;
+                        cropHeight = cropWidth / ASPECT_RATIO;
+                    }
+                    
+                    setCropBox({
+                        x: (displayWidth - cropWidth) / 2,
+                        y: (displayHeight - cropHeight) / 2,
+                        width: cropWidth,
+                        height: cropHeight
+                    });
+                }
+            };
+
+            const handleFileSelect = (file) => {
+                if (file && file.type.startsWith('image/')) {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const img = new Image();
+                        img.onload = () => {
+                            setImage(e.target.result);
+                            setImageDimensions({ width: img.width, height: img.height });
+                            setFileName(file.name.replace(/\.[^/.]+$/, ''));
+                        };
+                        img.src = e.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                const file = e.dataTransfer.files[0];
+                handleFileSelect(file);
+            };
+
+            // Initialize crop box when image is loaded and rendered
+            useEffect(() => {
+                if (image && imageRef.current) {
+                    initializeCropBox();
+                }
+            }, [image]);
+
+            const handleMouseDown = (e, isResize = false) => {
+                e.preventDefault();
+                setDragStart({ x: e.clientX, y: e.clientY });
+                if (isResize) {
+                    setIsResizing(true);
+                } else {
+                    setIsDragging(true);
+                }
+            };
+
+            useEffect(() => {
+                const handleMouseMove = (e) => {
+                    if (!imageRef.current) return;
+
+                    const displayWidth = imageRef.current.offsetWidth;
+                    const displayHeight = imageRef.current.offsetHeight;
+
+                    if (isDragging) {
+                        const dx = e.clientX - dragStart.x;
+                        const dy = e.clientY - dragStart.y;
+
+                        setCropBox(prev => {
+                            const newX = Math.max(0, Math.min(displayWidth - prev.width, prev.x + dx));
+                            const newY = Math.max(0, Math.min(displayHeight - prev.height, prev.y + dy));
+                            return { ...prev, x: newX, y: newY };
+                        });
+
+                        setDragStart({ x: e.clientX, y: e.clientY });
+                    } else if (isResizing) {
+                        const dx = e.clientX - dragStart.x;
+
+                        setCropBox(prev => {
+                            let newWidth = Math.max(50, prev.width + dx);
+                            let newHeight = newWidth / ASPECT_RATIO;
+
+                            // Ensure crop box doesn't exceed image bounds
+                            const maxWidth = displayWidth - prev.x;
+                            const maxHeight = displayHeight - prev.y;
+                            
+                            if (newWidth > maxWidth) {
+                                newWidth = maxWidth;
+                                newHeight = newWidth / ASPECT_RATIO;
+                            }
+                            
+                            if (newHeight > maxHeight) {
+                                newHeight = maxHeight;
+                                newWidth = newHeight * ASPECT_RATIO;
+                            }
+
+                            setDragStart({ x: e.clientX, y: e.clientY });
+                            return { ...prev, width: newWidth, height: newHeight };
+                        });
+                    }
+                };
+
+                const handleMouseUp = () => {
+                    setIsDragging(false);
+                    setIsResizing(false);
+                };
+
+                if (isDragging || isResizing) {
+                    document.addEventListener('mousemove', handleMouseMove);
+                    document.addEventListener('mouseup', handleMouseUp);
+                    return () => {
+                        document.removeEventListener('mousemove', handleMouseMove);
+                        document.removeEventListener('mouseup', handleMouseUp);
+                    };
+                }
+            }, [isDragging, isResizing, dragStart]);
+
+            const downloadCroppedImage = (resize = false) => {
+                if (!imageRef.current) return;
+
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                
+                const displayWidth = imageRef.current.offsetWidth;
+                const displayHeight = imageRef.current.offsetHeight;
+                
+                // Calculate scale factor
+                const scaleX = imageDimensions.width / displayWidth;
+                const scaleY = imageDimensions.height / displayHeight;
+                
+                // Map crop box to original image coordinates
+                const sourceX = cropBox.x * scaleX;
+                const sourceY = cropBox.y * scaleY;
+                const sourceWidth = cropBox.width * scaleX;
+                const sourceHeight = cropBox.height * scaleY;
+
+                if (resize) {
+                    // Resize to 530x650
+                    canvas.width = TARGET_WIDTH;
+                    canvas.height = TARGET_HEIGHT;
+                } else {
+                    // Keep original resolution
+                    canvas.width = sourceWidth;
+                    canvas.height = sourceHeight;
+                }
+
+                const img = new Image();
+                img.onload = () => {
+                    ctx.drawImage(
+                        img,
+                        sourceX, sourceY, sourceWidth, sourceHeight,
+                        0, 0, canvas.width, canvas.height
+                    );
+
+                    canvas.toBlob((blob) => {
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = resize 
+                            ? `${fileName}_530x650.png` 
+                            : `${fileName}_original.png`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                    });
+                };
+                img.src = image;
+            };
+
+            const copyToClipboard = async () => {
+                if (!imageRef.current) return;
+
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                
+                const displayWidth = imageRef.current.offsetWidth;
+                const displayHeight = imageRef.current.offsetHeight;
+                
+                // Calculate scale factor
+                const scaleX = imageDimensions.width / displayWidth;
+                const scaleY = imageDimensions.height / displayHeight;
+                
+                // Map crop box to original image coordinates
+                const sourceX = cropBox.x * scaleX;
+                const sourceY = cropBox.y * scaleY;
+                const sourceWidth = cropBox.width * scaleX;
+                const sourceHeight = cropBox.height * scaleY;
+
+                // Resize to 530x650
+                canvas.width = TARGET_WIDTH;
+                canvas.height = TARGET_HEIGHT;
+
+                const img = new Image();
+                img.onload = async () => {
+                    ctx.drawImage(
+                        img,
+                        sourceX, sourceY, sourceWidth, sourceHeight,
+                        0, 0, TARGET_WIDTH, TARGET_HEIGHT
+                    );
+
+                    canvas.toBlob(async (blob) => {
+                        try {
+                            await navigator.clipboard.write([
+                                new ClipboardItem({
+                                    'image/png': blob
+                                })
+                            ]);
+                            alert('Image copied to clipboard! You can now paste it in Figma (Cmd/Ctrl+V)');
+                        } catch (err) {
+                            console.error('Failed to copy image: ', err);
+                            alert('Failed to copy image to clipboard. Please try downloading instead.');
+                        }
+                    });
+                };
+                img.src = image;
+            };
+
+            const styles = {
+                container: {
+                    display: 'flex',
+                    flexDirection: 'column',
+                    height: '100vh',
+                    background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
+                    padding: '20px',
+                    boxSizing: 'border-box',
+                    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+                },
+                card: {
+                    background: 'white',
+                    borderRadius: '20px',
+                    padding: '30px',
+                    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.3)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    flex: 1,
+                    overflow: 'hidden',
+                    maxWidth: '1200px',
+                    margin: '0 auto',
+                    width: '100%',
+                },
+                header: {
+                    textAlign: 'center',
+                    marginBottom: '20px',
+                },
+                title: {
+                    fontSize: '2rem',
+                    color: '#333',
+                    margin: '0 0 5px 0',
+                },
+                subtitle: {
+                    fontSize: '0.9rem',
+                    color: '#666',
+                    margin: 0,
+                },
+                uploadArea: {
+                    border: '3px dashed #11998e',
+                    borderRadius: '15px',
+                    padding: '60px 40px',
+                    textAlign: 'center',
+                    cursor: 'pointer',
+                    background: '#f8fff9',
+                    transition: 'all 0.3s ease',
+                    flex: 1,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                },
+                uploadIcon: {
+                    fontSize: '3rem',
+                    marginBottom: '15px',
+                },
+                uploadText: {
+                    fontSize: '1.2rem',
+                    color: '#11998e',
+                    fontWeight: '600',
+                    marginBottom: '10px',
+                },
+                uploadSubtext: {
+                    fontSize: '0.9rem',
+                    color: '#999',
+                },
+                imageContainer: {
+                    position: 'relative',
+                    flex: 1,
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    overflow: 'hidden',
+                    marginBottom: '20px',
+                    minHeight: '300px',
+                },
+                imageWrapper: {
+                    position: 'relative',
+                    display: 'inline-block',
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                },
+                image: {
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                    display: 'block',
+                    userSelect: 'none',
+                    pointerEvents: 'none',
+                },
+                cropBox: {
+                    position: 'absolute',
+                    border: '2px solid #11998e',
+                    background: 'rgba(17, 153, 142, 0.1)',
+                    cursor: 'move',
+                    boxSizing: 'border-box',
+                },
+                resizeHandle: {
+                    position: 'absolute',
+                    bottom: '-6px',
+                    right: '-6px',
+                    width: '16px',
+                    height: '16px',
+                    background: 'white',
+                    border: '2px solid #11998e',
+                    borderRadius: '50%',
+                    cursor: 'se-resize',
+                },
+                controls: {
+                    display: 'flex',
+                    gap: '15px',
+                    justifyContent: 'center',
+                    flexWrap: 'wrap',
+                },
+                button: {
+                    padding: '12px 24px',
+                    fontSize: '1rem',
+                    border: 'none',
+                    borderRadius: '10px',
+                    cursor: 'pointer',
+                    fontWeight: '600',
+                    transition: 'all 0.3s ease',
+                },
+                primaryButton: {
+                    background: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
+                    color: 'white',
+                },
+                secondaryButton: {
+                    background: '#f0f0f0',
+                    color: '#333',
+                },
+                footer: {
+                    textAlign: 'center',
+                    marginTop: '20px',
+                    paddingTop: '20px',
+                    borderTop: '1px solid #e0e0e0',
+                    fontSize: '0.9rem',
+                    color: '#666',
+                },
+                link: {
+                    color: '#11998e',
+                    textDecoration: 'none',
+                    fontWeight: '600',
+                },
+            };
+
+            return (
+                <div style={styles.container}>
+                    <div style={styles.card}>
+                        <div style={styles.header}>
+                            <h1 style={styles.title}>Image Cropper</h1>
+                            <p style={styles.subtitle}>Crop images with 53:65 aspect ratio (530×650px)</p>
+                        </div>
+
+                        {!image ? (
+                            <div 
+                                style={styles.uploadArea}
+                                onClick={() => fileInputRef.current?.click()}
+                                onDrop={handleDrop}
+                                onDragOver={(e) => e.preventDefault()}
+                            >
+                                <div style={styles.uploadIcon}>📸</div>
+                                <div style={styles.uploadText}>Click or drag image here</div>
+                                <div style={styles.uploadSubtext}>Supports JPG, PNG, GIF</div>
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    accept="image/*"
+                                    style={{ display: 'none' }}
+                                    onChange={(e) => handleFileSelect(e.target.files[0])}
+                                />
+                            </div>
+                        ) : (
+                            <>
+                                <div ref={containerRef} style={styles.imageContainer}>
+                                    <div style={styles.imageWrapper}>
+                                        <img 
+                                            ref={imageRef}
+                                            src={image} 
+                                            alt="Preview" 
+                                            style={styles.image}
+                                        />
+                                        <div 
+                                            style={{
+                                                ...styles.cropBox,
+                                                left: `${cropBox.x}px`,
+                                                top: `${cropBox.y}px`,
+                                                width: `${cropBox.width}px`,
+                                                height: `${cropBox.height}px`,
+                                            }}
+                                            onMouseDown={(e) => handleMouseDown(e, false)}
+                                        >
+                                            <div 
+                                                style={styles.resizeHandle}
+                                                onMouseDown={(e) => {
+                                                    e.stopPropagation();
+                                                    handleMouseDown(e, true);
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div style={styles.controls}>
+                                    <button 
+                                        style={{...styles.button, ...styles.primaryButton}}
+                                        onClick={() => downloadCroppedImage(false)}
+                                    >
+                                        Download Original Resolution
+                                    </button>
+                                    <button 
+                                        style={{...styles.button, ...styles.primaryButton}}
+                                        onClick={() => downloadCroppedImage(true)}
+                                    >
+                                        Download 530×650
+                                    </button>
+                                    <button 
+                                        style={{...styles.button, ...styles.primaryButton}}
+                                        onClick={copyToClipboard}
+                                    >
+                                        Copy to Figma
+                                    </button>
+                                    <button 
+                                        style={{...styles.button, ...styles.secondaryButton}}
+                                        onClick={() => {
+                                            setImage(null);
+                                            setFileName('');
+                                        }}
+                                    >
+                                        New Image
+                                    </button>
+                                </div>
+                            </>
+                        )}
+
+                        <div style={styles.footer}>
+                            Made with 💚 by <a href="https://devchain.ro" target="_blank" style={styles.link}>DEV CHAIN SRL</a>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<ImageCropper />, document.getElementById('root'));
+    </script>
+</body>
+</html>
